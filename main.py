@@ -25,6 +25,9 @@ RUNNING = True
 current_command_id = 0
 MCAST_GRP = '239.255.255.250'
 
+control_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+control_socket.bind(("", 11111))
+control_socket.listen(1)
 scan_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM) 
 fcntl.fcntl(scan_socket, fcntl.F_SETFL, os.O_NONBLOCK)
 listen_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -97,6 +100,16 @@ def bulbs_detection_loop():
 		sleep(read_interval/1000.0)
 	scan_socket.close()
 	listen_socket.close()
+
+def control_loop():
+	while RUNNING:
+		clientsocket, addr = control_socket.accept()
+		while RUNNING:
+			val = clientsocket.recv(4096).decode()
+			if not val:
+				break
+			print(val)
+		clientsocket.close()
 
 def get_param_value(data, param):
 	'''
@@ -214,7 +227,6 @@ def day_timer():
 def print_cli_usage():
 	print("Usage:")
 	print("  q|quit: quit bulb manager")
-	print("  h|help: pass#print this message")
 	print("  t|toggle <idx>: toggle bulb indicated by idx")
 	print("  b|bright <idx> <bright>: set brightness of bulb with label <idx>")
 	print("  r|refresh: refresh bulb list")
@@ -314,11 +326,19 @@ print_cli_usage()
 # user interaction loop
 detection_thread = Thread(target=bulbs_detection_loop)
 detection_thread.start()
+
+control_thread = Thread(target=control_loop)
+control_thread.start()
 # give detection thread some time to collect bulb info
 sleep(0.4)
 # user interaction loop
 handle_user_input()
 # user interaction end, tell detection thread to quit and wait
 RUNNING = False
+kill_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+kill_socket.connect(("localhost", 11111))
+kill_socket.close()
+control_socket.close()
 detection_thread.join()
+control_thread.join()
 # done
