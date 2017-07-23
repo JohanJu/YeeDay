@@ -179,6 +179,10 @@ def set_rgb(idx, r, g, b):
 	rgb = r*65536+g*256+b
 	operate_on_bulb(idx, "set_rgb", str(rgb))
 
+def set_day(idx, dur, temp, bright):
+	cmd = "1,1,\""+str(dur)+",2,"+str(temp)+","+str(bright)+"\""
+	operate_on_bulb(idx, "start_cf", cmd)
+
 def print_cli_usage():
 	print "Usage:"
 	print "  q|quit: quit bulb manager"
@@ -246,6 +250,17 @@ def handle_user_input():
 					g = int(float(argv[2]))
 					b = int(float(argv[3]))
 					set_rgb(1, r, g, b)
+				except:
+					valid_cli=False
+		elif argv[0] == "s":
+			if len(argv) != 3:
+				print "incorrect argc"
+				valid_cli=False
+			else:
+				try:
+					temp = int(float(argv[1]))
+					bright = int(float(argv[2]))
+					set_day(1, 1000, temp, bright)
 				except:
 					valid_cli=False
 		else:
