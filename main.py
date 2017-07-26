@@ -10,6 +10,13 @@ import struct
 from threading import Thread
 from time import sleep
 from collections import OrderedDict
+import datetime
+
+times = [
+	(datetime.time(0, 0, 10),(2000,2)),
+	(datetime.time(15, 16, 30),(6000,2)),
+	(datetime.time(15, 26, 22),(4000,2)),
+]
 
 detected_bulbs = {}
 bulb_idx2ip = {}
@@ -117,7 +124,7 @@ def handle_search_response(data):
 	if detected_bulbs.has_key(host_ip):
 		bulb_id = detected_bulbs[host_ip][0]
 	else:
-		bulb_id = len(detected_bulbs)+1
+		bulb_id = len(detected_bulbs)
 	host_port = match.group(3)
 	model = get_param_value(data, "model")
 	power = get_param_value(data, "power") 
@@ -143,7 +150,7 @@ def display_bulb(idx):
 
 def display_bulbs():
 	print str(len(detected_bulbs)) + " managed bulbs"
-	for i in range(1, len(detected_bulbs)+1):
+	for i in range(0, len(detected_bulbs)):
 		display_bulb(i)
 
 def operate_on_bulb(idx, method, params):
@@ -160,7 +167,7 @@ def operate_on_bulb(idx, method, params):
 	port=detected_bulbs[bulb_ip][5]
 	try:
 		tcp_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-		print "connect ",bulb_ip, port ,"..."
+		# print "connect ",bulb_ip, port ,"..."
 		tcp_socket.connect((bulb_ip, int(port)))
 		msg="{\"id\":" + str(next_cmd_id()) + ",\"method\":\""
 		msg += method + "\",\"params\":[" + params + "]}\r\n"
@@ -183,6 +190,27 @@ def set_day(idx, dur, temp, bright):
 	cmd = "1,1,\""+str(dur)+",2,"+str(temp)+","+str(bright)+"\""
 	operate_on_bulb(idx, "start_cf", cmd)
 
+
+def delta(t):
+	n = datetime.datetime.time(datetime.datetime.now())
+	return (t.hour-n.hour)*3600+(t.minute-n.minute)*60+t.second-n.second
+
+def day_timer():
+	i = 0
+	while RUNNING:
+		while delta(times[i][0]) < 0:
+			i = (i+1)
+			if i == len(times):
+				i = 0
+				break
+		# print times[i-1][1][0], times[i-1][1][1]
+		set_day(0, 1000, times[i-1][1][0], times[i-1][1][1]);
+		sleep_for = (delta(times[i][0])+3600*24)%(3600*24)+1
+		# sleep(sleep_for)
+		done = time.time()+sleep_for
+		while RUNNING and time.time() < done:
+			sleep(1) # killable
+	
 def print_cli_usage():
 	print "Usage:"
 	print "  q|quit: quit bulb manager"
@@ -249,7 +277,7 @@ def handle_user_input():
 					r = int(float(argv[1]))
 					g = int(float(argv[2]))
 					b = int(float(argv[3]))
-					set_rgb(1, r, g, b)
+					set_rgb(0, r, g, b)
 				except:
 					valid_cli=False
 		elif argv[0] == "s":
@@ -260,9 +288,17 @@ def handle_user_input():
 				try:
 					temp = int(float(argv[1]))
 					bright = int(float(argv[2]))
-					set_day(1, 1000, temp, bright)
+					bright = min(bright,10)
+					temp = max(min(temp,6),2)
+					set_day(0, 1000, temp*1000, bright*10)
 				except:
 					valid_cli=False
+		elif argv[0] == "d":
+			if len(argv) != 1:
+				print "incorrect argc"
+				valid_cli=False
+			timer_thread = Thread(target=day_timer)
+			timer_thread.start()
 		else:
 			valid_cli=False
 					
@@ -275,10 +311,11 @@ def handle_user_input():
 print "Welcome to Yeelight WifiBulb Lan controller"
 print_cli_usage
 # start the bulb detection thread
+# user interaction loop
 detection_thread = Thread(target=bulbs_detection_loop)
 detection_thread.start()
 # give detection thread some time to collect bulb info
-sleep(0.2)
+sleep(0.4)
 # user interaction loop
 handle_user_input()
 # user interaction end, tell detection thread to quit and wait
