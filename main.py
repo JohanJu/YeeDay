@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/python3
 
 import socket  
 import time
@@ -35,7 +35,7 @@ listen_socket.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
 
 def debug(msg):
 	if DEBUGGING:
-		print msg
+		print(msg)
 
 def next_cmd_id():
 	global current_command_id
@@ -52,7 +52,7 @@ def send_search_broadcast():
 	msg = msg + "HOST: 239.255.255.250:1982\r\n"
 	msg = msg + "MAN: \"ssdp:discover\"\r\n"
 	msg = msg + "ST: wifi_bulb"
-	scan_socket.sendto(msg, multicase_address)
+	scan_socket.sendto(msg.encode('utf-8'), multicase_address)
 
 def bulbs_detection_loop():
 	'''
@@ -71,27 +71,27 @@ def bulbs_detection_loop():
 		while True:
 			try:
 				data = scan_socket.recv(2048)
-			except socket.error, e:
+			except socket.error as e:
 				err = e.args[0]
 				if err == errno.EAGAIN or err == errno.EWOULDBLOCK:
 						break
 				else:
-						print e
+						print(e)
 						sys.exit(1)
-			handle_search_response(data)
+			handle_search_response(data.decode('utf-8'))
 
 		# passive listener 
 		while True:
 			try:
 				data, addr = listen_socket.recvfrom(2048)
-			except socket.error, e:
+			except socket.error as e:
 				err = e.args[0]
 				if err == errno.EAGAIN or err == errno.EWOULDBLOCK:
 						break
 				else:
-						print e
+						print(e)
 						sys.exit(1)
-			handle_search_response(data)
+			handle_search_response(data.decode('utf-8'))
 
 		time_elapsed+=read_interval
 		sleep(read_interval/1000.0)
@@ -102,7 +102,7 @@ def get_param_value(data, param):
 	'''
 	match line of 'param = value'
 	'''
-	param_re = re.compile(param+":\s*([ -~]*)") #match all printable characters
+	param_re = re.compile(param+":\s*([ -~]*)") #match all print(able characters)
 	match = param_re.search(data)
 	value=""
 	if match != None:
@@ -121,7 +121,7 @@ def handle_search_response(data):
 		return 
 
 	host_ip = match.group(1)
-	if detected_bulbs.has_key(host_ip):
+	if host_ip in detected_bulbs:
 		bulb_id = detected_bulbs[host_ip][0]
 	else:
 		bulb_id = len(detected_bulbs)
@@ -135,21 +135,21 @@ def handle_search_response(data):
 	bulb_idx2ip[bulb_id] = host_ip
 
 def display_bulb(idx):
-	if not bulb_idx2ip.has_key(idx):
-		print "error: invalid bulb idx"
+	if not idx in bulb_idx2ip:
+		print("error: invalid bulb idx")
 		return
 	bulb_ip = bulb_idx2ip[idx]
 	model = detected_bulbs[bulb_ip][1]
 	power = detected_bulbs[bulb_ip][2]
 	bright = detected_bulbs[bulb_ip][3]
 	rgb = detected_bulbs[bulb_ip][4]
-	print str(idx) + ": ip=" \
+	print (str(idx) + ": ip=" \
 		+bulb_ip + ",model=" + model \
 		+",power=" + power + ",bright=" \
-		+ bright + ",rgb=" + rgb
+		+ bright + ",rgb=" + rgb)
 
 def display_bulbs():
-	print str(len(detected_bulbs)) + " managed bulbs"
+	print(str(len(detected_bulbs)) + " managed bulbs")
 	for i in range(0, len(detected_bulbs)):
 		display_bulb(i)
 
@@ -159,22 +159,22 @@ def operate_on_bulb(idx, method, params):
 	Input data 'params' must be a compiled into one string.
 	E.g. params="1"; params="\"smooth\"", params="1,\"smooth\",80"
 	'''
-	if not bulb_idx2ip.has_key(idx):
-		print "error: invalid bulb idx"
+	if not idx in bulb_idx2ip:
+		print("error: invalid bulb idx")
 		return
 	
 	bulb_ip=bulb_idx2ip[idx]
 	port=detected_bulbs[bulb_ip][5]
 	try:
 		tcp_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-		# print "connect ",bulb_ip, port ,"..."
+		# print("connect ",bulb_ip, port ,"...")
 		tcp_socket.connect((bulb_ip, int(port)))
 		msg="{\"id\":" + str(next_cmd_id()) + ",\"method\":\""
 		msg += method + "\",\"params\":[" + params + "]}\r\n"
-		tcp_socket.send(msg)
+		tcp_socket.send(msg.encode('utf-8'))
 		tcp_socket.close()
 	except Exception as e:
-		print "Unexpected error:", e
+		print("Unexpected error:", e)
 
 def toggle_bulb(idx):
 	operate_on_bulb(idx, "toggle", "")
@@ -203,7 +203,7 @@ def day_timer():
 			if i == len(times):
 				i = 0
 				break
-		# print times[i-1][1][0], times[i-1][1][1]
+		# print(times[i-1][1][0], times[i-1][1][1])
 		set_day(0, 1000, times[i-1][1][0], times[i-1][1][1]);
 		sleep_for = (delta(times[i][0])+3600*24)%(3600*24)+1
 		# sleep(sleep_for)
@@ -212,20 +212,20 @@ def day_timer():
 			sleep(1) # killable
 	
 def print_cli_usage():
-	print "Usage:"
-	print "  q|quit: quit bulb manager"
-	print "  h|help: print this message"
-	print "  t|toggle <idx>: toggle bulb indicated by idx"
-	print "  b|bright <idx> <bright>: set brightness of bulb with label <idx>"
-	print "  r|refresh: refresh bulb list"
-	print "  l|list: lsit all managed bulbs"
+	print("Usage:")
+	print("  q|quit: quit bulb manager")
+	print("  h|help: pass#print this message")
+	print("  t|toggle <idx>: toggle bulb indicated by idx")
+	print("  b|bright <idx> <bright>: set brightness of bulb with label <idx>")
+	print("  r|refresh: refresh bulb list")
+	print("  l|list: lsit all managed bulbs")
 	
 def handle_user_input():
 	'''
 	User interaction loop. 
 	'''
 	while True:
-		command_line = raw_input("Enter a command: ")
+		command_line = input("Enter a command: ")
 		valid_cli=True
 		debug("command_line=" + command_line)
 		command_line.lower() # convert all user input to lower case, i.e. cli is caseless
@@ -233,7 +233,7 @@ def handle_user_input():
 		if len(argv) == 0:
 			continue
 		if argv[0] == "q" or argv[0] == "quit":
-			print "Bye!"
+			print("Bye!")
 			return
 		elif argv[0] == "l" or argv[0] == "list":
 			display_bulbs()
@@ -244,7 +244,7 @@ def handle_user_input():
 			#sleep(0.5)
 			#display_bulbs()
 		elif argv[0] == "h" or argv[0] == "help":
-			print_cli_usage()
+			print(_cli_usage())
 			continue
 		elif argv[0] == "t" or argv[0] == "toggle":
 			if len(argv) != 2:
@@ -257,20 +257,20 @@ def handle_user_input():
 					valid_cli=False
 		elif argv[0] == "b" or argv[0] == "bright":
 			if len(argv) != 3:
-				print "incorrect argc"
+				print("incorrect argc")
 				valid_cli=False
 			else:
 				try:
 					idx = int(float(argv[1]))
-					print "idx", idx
+					print("idx", idx)
 					bright = int(float(argv[2]))
-					print "bright", bright
+					print("bright", bright)
 					set_bright(idx, bright)
 				except:
 					valid_cli=False
 		elif argv[0] == "c":
 			if len(argv) != 4:
-				print "incorrect argc"
+				print("incorrect argc")
 				valid_cli=False
 			else:
 				try:
@@ -282,7 +282,7 @@ def handle_user_input():
 					valid_cli=False
 		elif argv[0] == "s":
 			if len(argv) != 3:
-				print "incorrect argc"
+				print("incorrect argc")
 				valid_cli=False
 			else:
 				try:
@@ -295,7 +295,7 @@ def handle_user_input():
 					valid_cli=False
 		elif argv[0] == "d":
 			if len(argv) != 1:
-				print "incorrect argc"
+				print("incorrect argc")
 				valid_cli=False
 			timer_thread = Thread(target=day_timer)
 			timer_thread.start()
@@ -303,13 +303,13 @@ def handle_user_input():
 			valid_cli=False
 					
 		if not valid_cli:
-			print "error: invalid command line:", command_line
-			print_cli_usage()
+			print("error: invalid command line:", command_line)
+			print(_cli_usage())
 
 ## main starts here
-# print welcome message first
-print "Welcome to Yeelight WifiBulb Lan controller"
-print_cli_usage
+# print(welcome message first)
+print ("Welcome to Yeelight WifiBulb Lan controller")
+print_cli_usage()
 # start the bulb detection thread
 # user interaction loop
 detection_thread = Thread(target=bulbs_detection_loop)
