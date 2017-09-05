@@ -8,6 +8,7 @@ import os
 import errno
 import struct
 from threading import Thread
+from threading import Lock
 from time import sleep
 from collections import OrderedDict
 import datetime
@@ -24,6 +25,7 @@ DEBUGGING = False
 RUNNING = True
 current_command_id = 0
 MCAST_GRP = '239.255.255.250'
+lock = Lock()
 
 control_socket = socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
 control_socket.bind(("", 23232))
@@ -167,8 +169,9 @@ def operate_on_bulb(idx, method, params):
 	
 	bulb_ip=bulb_idx2ip[idx]
 	port=detected_bulbs[bulb_ip][5]
+	lock.acquire()
 	try:
-		tcp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+		tcp_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 		# print("connect ",bulb_ip, port ,"...")
 		tcp_socket.connect((bulb_ip, int(port)))
 		msg="{\"id\":" + str(next_cmd_id()) + ",\"method\":\""
@@ -177,6 +180,7 @@ def operate_on_bulb(idx, method, params):
 		tcp_socket.close()
 	except Exception as e:
 		print("Unexpected error:", e)
+	lock.release()
 
 def toggle_bulb(idx):
 	bulb_ip = bulb_idx2ip[idx]
@@ -215,7 +219,7 @@ def control_loop():
 	while RUNNING:
 		data, addr = control_socket.recvfrom(4096)
 		if addr[0] != "127.0.0.1":
-			print ("received message:", data, addr)
+			toggle_bulb(0)
 		if 0:
 			control_socket.sendto(data, (addr[0], addr[1]))
 
