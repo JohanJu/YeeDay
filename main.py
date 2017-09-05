@@ -25,9 +25,8 @@ RUNNING = True
 current_command_id = 0
 MCAST_GRP = '239.255.255.250'
 
-control_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-control_socket.bind(("", 11111))
-control_socket.listen(1)
+control_socket = socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
+control_socket.bind(("", 23232))
 scan_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM) 
 fcntl.fcntl(scan_socket, fcntl.F_SETFL, os.O_NONBLOCK)
 listen_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -55,7 +54,7 @@ def send_search_broadcast():
 	msg = msg + "HOST: 239.255.255.250:1982\r\n"
 	msg = msg + "MAN: \"ssdp:discover\"\r\n"
 	msg = msg + "ST: wifi_bulb"
-	scan_socket.sendto(msg.encode('utf-8'), multicase_address)
+	scan_socket.sendto(msg.encode(), multicase_address)
 
 def bulbs_detection_loop():
 	'''
@@ -81,7 +80,7 @@ def bulbs_detection_loop():
 				else:
 						print(e)
 						sys.exit(1)
-			handle_search_response(data.decode('utf-8'))
+			handle_search_response(data.decode())
 
 		# passive listener 
 		while True:
@@ -94,22 +93,12 @@ def bulbs_detection_loop():
 				else:
 						print(e)
 						sys.exit(1)
-			handle_search_response(data.decode('utf-8'))
+			handle_search_response(data.decode())
 
 		time_elapsed+=read_interval
 		sleep(read_interval/1000.0)
 	scan_socket.close()
 	listen_socket.close()
-
-def control_loop():
-	while RUNNING:
-		clientsocket, addr = control_socket.accept()
-		while RUNNING:
-			val = clientsocket.recv(4096).decode()
-			if not val:
-				break
-			print(val)
-		clientsocket.close()
 
 def get_param_value(data, param):
 	'''
@@ -179,30 +168,28 @@ def operate_on_bulb(idx, method, params):
 	bulb_ip=bulb_idx2ip[idx]
 	port=detected_bulbs[bulb_ip][5]
 	try:
-		tcp_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+		tcp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 		# print("connect ",bulb_ip, port ,"...")
 		tcp_socket.connect((bulb_ip, int(port)))
 		msg="{\"id\":" + str(next_cmd_id()) + ",\"method\":\""
 		msg += method + "\",\"params\":[" + params + "]}\r\n"
-		tcp_socket.send(msg.encode('utf-8'))
+		tcp_socket.send(msg.encode())
 		tcp_socket.close()
 	except Exception as e:
 		print("Unexpected error:", e)
 
 def toggle_bulb(idx):
+	bulb_ip = bulb_idx2ip[idx]
+	power = detected_bulbs[bulb_ip][2]
+	if power == "on":
+		detected_bulbs[bulb_ip][2] = "off"
+	else:
+		detected_bulbs[bulb_ip][2] = "on"
 	operate_on_bulb(idx, "toggle", "")
-
-def set_bright(idx, bright):
-	operate_on_bulb(idx, "set_bright", str(bright))
-
-def set_rgb(idx, r, g, b):
-	rgb = r*65536+g*256+b
-	operate_on_bulb(idx, "set_rgb", str(rgb))
 
 def set_day(idx, dur, temp, bright):
 	cmd = "1,1,\""+str(dur)+",2,"+str(temp)+","+str(bright)+"\""
 	operate_on_bulb(idx, "start_cf", cmd)
-
 
 def delta(t):
 	n = datetime.datetime.time(datetime.datetime.now())
@@ -224,11 +211,18 @@ def day_timer():
 		while RUNNING and time.time() < done:
 			sleep(1) # killable
 	
+def control_loop():
+	while RUNNING:
+		data, addr = control_socket.recvfrom(4096)
+		if addr[0] != "127.0.0.1":
+			print ("received message:", data, addr)
+		if 0:
+			control_socket.sendto(data, (addr[0], addr[1]))
+
 def print_cli_usage():
 	print("Usage:")
 	print("  q|quit: quit bulb manager")
 	print("  t|toggle <idx>: toggle bulb indicated by idx")
-	print("  b|bright <idx> <bright>: set brightness of bulb with label <idx>")
 	print("  r|refresh: refresh bulb list")
 	print("  l|list: lsit all managed bulbs")
 	
@@ -253,11 +247,8 @@ def handle_user_input():
 			detected_bulbs.clear()
 			bulb_idx2ip.clear()
 			send_search_broadcast()
-			#sleep(0.5)
-			#display_bulbs()
-		elif argv[0] == "h" or argv[0] == "help":
-			print(_cli_usage())
-			continue
+			sleep(0.5)
+			display_bulbs()
 		elif argv[0] == "t" or argv[0] == "toggle":
 			if len(argv) != 2:
 				valid_cli=False
@@ -265,31 +256,6 @@ def handle_user_input():
 				try:
 					i = int(float(argv[1]))
 					toggle_bulb(i)
-				except:
-					valid_cli=False
-		elif argv[0] == "b" or argv[0] == "bright":
-			if len(argv) != 3:
-				print("incorrect argc")
-				valid_cli=False
-			else:
-				try:
-					idx = int(float(argv[1]))
-					print("idx", idx)
-					bright = int(float(argv[2]))
-					print("bright", bright)
-					set_bright(idx, bright)
-				except:
-					valid_cli=False
-		elif argv[0] == "c":
-			if len(argv) != 4:
-				print("incorrect argc")
-				valid_cli=False
-			else:
-				try:
-					r = int(float(argv[1]))
-					g = int(float(argv[2]))
-					b = int(float(argv[3]))
-					set_rgb(0, r, g, b)
 				except:
 					valid_cli=False
 		elif argv[0] == "s":
@@ -301,8 +267,8 @@ def handle_user_input():
 					temp = int(float(argv[1]))
 					bright = int(float(argv[2]))
 					bright = min(bright,10)
-					temp = max(min(temp,6),2)
-					set_day(0, 1000, temp*1000, bright*10)
+					temp = max(min(temp,65),17)
+					set_day(0, 1000, temp*100, bright*10)
 				except:
 					valid_cli=False
 		elif argv[0] == "d":
@@ -316,8 +282,7 @@ def handle_user_input():
 					
 		if not valid_cli:
 			print("error: invalid command line:", command_line)
-			print(_cli_usage())
-
+			print_cli_usage()
 ## main starts here
 # print(welcome message first)
 print ("Welcome to Yeelight WifiBulb Lan controller")
@@ -330,13 +295,13 @@ detection_thread.start()
 control_thread = Thread(target=control_loop)
 control_thread.start()
 # give detection thread some time to collect bulb info
-sleep(0.4)
+sleep(0.5)
 # user interaction loop
 handle_user_input()
 # user interaction end, tell detection thread to quit and wait
 RUNNING = False
-kill_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-kill_socket.connect(("localhost", 11111))
+kill_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+kill_socket.sendto("".encode(), ("localhost", 23232))
 kill_socket.close()
 control_socket.close()
 detection_thread.join()
