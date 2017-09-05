@@ -14,10 +14,11 @@ from collections import OrderedDict
 import datetime
 
 times = [
-	(datetime.time(0, 0, 10),(2000,2)),
-	(datetime.time(15, 16, 30),(6000,2)),
-	(datetime.time(15, 26, 22),(4000,2)),
+	(datetime.time(6, 0, 0),(4000,80)),
+	(datetime.time(22, 0, 0),(2000,40))
 ]
+alarm_time = datetime.time(21, 4, 0)
+color = (3000,40)
 
 detected_bulbs = {}
 bulb_idx2ip = {}
@@ -182,38 +183,50 @@ def operate_on_bulb(idx, method, params):
 		print("Unexpected error:", e)
 	lock.release()
 
-def toggle_bulb(idx):
-	bulb_ip = bulb_idx2ip[idx]
-	power = detected_bulbs[bulb_ip][2]
-	if power == "on":
-		detected_bulbs[bulb_ip][2] = "off"
-	else:
-		detected_bulbs[bulb_ip][2] = "on"
-	operate_on_bulb(idx, "toggle", "")
-
 def set_day(idx, dur, temp, bright):
 	cmd = "1,1,\""+str(dur)+",2,"+str(temp)+","+str(bright)+"\""
 	operate_on_bulb(idx, "start_cf", cmd)
 
-def delta(t):
-	n = datetime.datetime.time(datetime.datetime.now())
-	return (t.hour-n.hour)*3600+(t.minute-n.minute)*60+t.second-n.second
+
+def toggle_bulb(idx, alarm=None):
+	bulb_ip = bulb_idx2ip[idx]
+	power = detected_bulbs[bulb_ip][2]
+	if power == "on":
+		detected_bulbs[bulb_ip][2] = "off"
+		set_day(idx, 100, 2000, 1);
+		operate_on_bulb(idx, "toggle", "")
+	else:
+		detected_bulbs[bulb_ip][2] = "on"
+		operate_on_bulb(idx, "toggle", "")
+		if not alarm:
+			set_day(idx, 1000, color[0], color[1]);
+	
 
 def day_timer():
 	i = 0
+	global color
 	while RUNNING:
-		while delta(times[i][0]) < 0:
-			i = (i+1)
+		now = datetime.datetime.now()
+		soon = datetime.datetime.combine(datetime.date.today(),times[i][0])
+		while now > soon:
+			i += 1
 			if i == len(times):
-				i = 0
-				break
-		# print(times[i-1][1][0], times[i-1][1][1])
-		set_day(0, 1000, times[i-1][1][0], times[i-1][1][1]);
-		sleep_for = (delta(times[i][0])+3600*24)%(3600*24)+1
-		# sleep(sleep_for)
-		done = time.time()+sleep_for
-		while RUNNING and time.time() < done:
+				i = 0;
+				soon = datetime.datetime.combine(datetime.date.today()+datetime.timedelta(days=1),times[i][0])
+				break;
+			soon = datetime.datetime.combine(datetime.date.today(),times[i][0])
+		color = times[i-1][1]
+		set_day(0, 60000, color[0], color[1]);
+		alarm = datetime.datetime.combine(datetime.date.today(),alarm_time)
+		if now > alarm:
+			alarm = datetime.datetime.combine(datetime.date.today()+datetime.timedelta(days=1),alarm_time)
+		while RUNNING and now < soon:
+			if alarm_time and detected_bulbs[bulb_idx2ip[0]][2] == "off" and (alarm-now).total_seconds() < 5:
+				toggle_bulb(0,1)
+				set_day(0, 60000, 6000, 100);
 			sleep(1) # killable
+			now = datetime.datetime.now()
+
 	
 def control_loop():
 	while RUNNING:
@@ -254,11 +267,14 @@ def handle_user_input():
 			sleep(0.5)
 			display_bulbs()
 		elif argv[0] == "t" or argv[0] == "toggle":
-			if len(argv) != 2:
+			if len(argv) > 2:
 				valid_cli=False
 			else:
 				try:
-					i = int(float(argv[1]))
+					if len(argv) == 2:
+						i = int(float(argv[1]))
+					else:
+						i = 0
 					toggle_bulb(i)
 				except:
 					valid_cli=False
