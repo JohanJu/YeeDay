@@ -13,12 +13,20 @@ from time import sleep
 from collections import OrderedDict
 import datetime
 
+log = open('/home/john/log.txt', 'w')
+
+testing = datetime.datetime.now()
+
 times = [
-	(datetime.time(6, 0, 0),(4000,80)),
-	(datetime.time(22, 0, 0),(2000,40))
+	# ((testing+datetime.timedelta(seconds=10)).time(),(4000,80)),
+	# ((testing+datetime.timedelta(seconds=20)).time(),(2000,80))
+	(datetime.time(6, 0, 0),(4000, 80)),
+	(datetime.time(22, 0, 0),(2000, 40))
 ]
-alarm_time = datetime.time(21, 4, 0)
-color = (3000,40)
+alarm_time = datetime.time(6, 50, 0)
+color = (3000, 40)
+movie = False
+alarm = None
 
 detected_bulbs = {}
 bulb_idx2ip = {}
@@ -177,6 +185,7 @@ def operate_on_bulb(idx, method, params):
 		tcp_socket.connect((bulb_ip, int(port)))
 		msg="{\"id\":" + str(next_cmd_id()) + ",\"method\":\""
 		msg += method + "\",\"params\":[" + params + "]}\r\n"
+		print(msg[:-2], datetime.datetime.now().replace(microsecond=0), file=log, flush=True)
 		tcp_socket.send(msg.encode())
 		tcp_socket.close()
 	except Exception as e:
@@ -188,18 +197,20 @@ def set_day(idx, dur, temp, bright):
 	operate_on_bulb(idx, "start_cf", cmd)
 
 
-def toggle_bulb(idx, alarm=None):
+def toggle_bulb(idx, change=None):
 	bulb_ip = bulb_idx2ip[idx]
 	power = detected_bulbs[bulb_ip][2]
 	if power == "on":
 		detected_bulbs[bulb_ip][2] = "off"
 		set_day(idx, 100, 2000, 1);
+		sleep(0.2)
 		operate_on_bulb(idx, "toggle", "")
 	else:
 		detected_bulbs[bulb_ip][2] = "on"
 		operate_on_bulb(idx, "toggle", "")
-		if not alarm:
-			set_day(idx, 1000, color[0], color[1]);
+		sleep(0.2)
+		if not change:
+			set_day(idx, 100, color[0], color[1]);
 	
 
 def day_timer():
@@ -217,12 +228,13 @@ def day_timer():
 			soon = datetime.datetime.combine(datetime.date.today(),times[i][0])
 		color = times[i-1][1]
 		set_day(0, 60000, color[0], color[1]);
+		global alarm
 		alarm = datetime.datetime.combine(datetime.date.today(),alarm_time)
 		if now > alarm:
 			alarm = datetime.datetime.combine(datetime.date.today()+datetime.timedelta(days=1),alarm_time)
 		while RUNNING and now < soon:
 			if alarm_time and detected_bulbs[bulb_idx2ip[0]][2] == "off" and (alarm-now).total_seconds() < 5:
-				toggle_bulb(0,1)
+				toggle_bulb(0, 1)
 				set_day(0, 60000, 6000, 100);
 			sleep(1) # killable
 			now = datetime.datetime.now()
@@ -232,9 +244,34 @@ def control_loop():
 	while RUNNING:
 		data, addr = control_socket.recvfrom(4096)
 		if addr[0] != "127.0.0.1":
-			toggle_bulb(0)
-		if 0:
-			control_socket.sendto(data, (addr[0], addr[1]))
+			data = data.decode()
+			global alarm_time
+			if data == 't':
+				toggle_bulb(0)
+			elif data == 'm':
+				global movie
+				if detected_bulbs[bulb_idx2ip[0]][2] == "off":
+					toggle_bulb(0, 1)
+					movie = True
+				else:
+					if movie:
+						set_day(0, 100, color[0], color[1]);
+					else:
+						set_day(0, 100, 2000, 1);
+					movie = not movie
+			elif data == 'u':
+				control_socket.sendto(alarm_time.strftime("%H%M").encode(),addr)
+			else:
+				h = int(data[1:3])
+				m = int(data[3:])
+				alarm_time = datetime.time(h, m, 0)
+				global alarm
+				alarm = datetime.datetime.combine(datetime.date.today(),alarm_time)
+				if datetime.datetime.now() > alarm:
+					alarm = datetime.datetime.combine(datetime.date.today()+datetime.timedelta(days=1),alarm_time)
+
+
+
 
 def print_cli_usage():
 	print("Usage:")
@@ -291,12 +328,12 @@ def handle_user_input():
 					set_day(0, 1000, temp*100, bright*10)
 				except:
 					valid_cli=False
-		elif argv[0] == "d":
-			if len(argv) != 1:
-				print("incorrect argc")
-				valid_cli=False
-			timer_thread = Thread(target=day_timer)
-			timer_thread.start()
+		# elif argv[0] == "d":
+		# 	if len(argv) != 1:
+		# 		print("incorrect argc")
+		# 		valid_cli=False
+		# 	timer_thread = Thread(target=day_timer)
+		# 	timer_thread.start()
 		else:
 			valid_cli=False
 					
@@ -314,8 +351,13 @@ detection_thread.start()
 
 control_thread = Thread(target=control_loop)
 control_thread.start()
+
 # give detection thread some time to collect bulb info
-sleep(0.5)
+sleep(1)
+
+timer_thread = Thread(target=day_timer)
+timer_thread.start()
+
 # user interaction loop
 handle_user_input()
 # user interaction end, tell detection thread to quit and wait
@@ -326,4 +368,5 @@ kill_socket.close()
 control_socket.close()
 detection_thread.join()
 control_thread.join()
+timer_thread.join()
 # done
