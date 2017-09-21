@@ -7,16 +7,12 @@ import re
 import os
 import errno
 import struct
-from threading import Thread
-from threading import Lock
+import threading
 from time import sleep
 from collections import OrderedDict
 import datetime
 
-log = open('/home/john/log.txt', 'w')
-
 testing = datetime.datetime.now()
-
 times = [
 	# ((testing+datetime.timedelta(seconds=10)).time(),(4000,80)),
 	# ((testing+datetime.timedelta(seconds=20)).time(),(2000,80))
@@ -24,9 +20,12 @@ times = [
 	(datetime.time(22, 0, 0),(2000, 40))
 ]
 alarm_time = datetime.time(6, 50, 0)
-color = (3000, 40)
+color = (2000, 1)
 movie = False
-alarm = None
+
+event = threading.Event()
+event.clear()
+lock = threading.Lock()
 
 detected_bulbs = {}
 bulb_idx2ip = {}
@@ -34,10 +33,6 @@ DEBUGGING = False
 RUNNING = True
 current_command_id = 0
 MCAST_GRP = '239.255.255.250'
-lock = Lock()
-
-control_socket = socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
-control_socket.bind(("", 23232))
 scan_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM) 
 fcntl.fcntl(scan_socket, fcntl.F_SETFL, os.O_NONBLOCK)
 listen_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -72,7 +67,7 @@ def bulbs_detection_loop():
 	a standalone thread broadcasting search request and listening on all responses
 	'''
 	debug("bulbs_detection_loop running")
-	search_interval=30000
+	search_interval=5000
 	read_interval=100
 	time_elapsed=0
 
@@ -146,6 +141,11 @@ def handle_search_response(data):
 	# use two dictionaries to store index->ip and ip->bulb map
 	detected_bulbs[host_ip] = [bulb_id, model, power, bright, rgb, host_port]
 	bulb_idx2ip[bulb_id] = host_ip
+	# if event.is_set(): #not startup
+	# 	set_day(0, 110, color[0], color[1]);
+	if(len(detected_bulbs)>0):
+		event.set()
+
 
 def display_bulb(idx):
 	if not idx in bulb_idx2ip:
@@ -185,7 +185,7 @@ def operate_on_bulb(idx, method, params):
 		tcp_socket.connect((bulb_ip, int(port)))
 		msg="{\"id\":" + str(next_cmd_id()) + ",\"method\":\""
 		msg += method + "\",\"params\":[" + params + "]}\r\n"
-		print(msg[:-2], datetime.datetime.now().replace(microsecond=0), file=log, flush=True)
+		# print(msg[:-2], datetime.datetime.now().replace(microsecond=0), flush=True)
 		tcp_socket.send(msg.encode())
 		tcp_socket.close()
 	except Exception as e:
@@ -196,26 +196,32 @@ def set_day(idx, dur, temp, bright):
 	cmd = "1,1,\""+str(dur)+",2,"+str(temp)+","+str(bright)+"\""
 	operate_on_bulb(idx, "start_cf", cmd)
 
-
-def toggle_bulb(idx, change=None):
+def toggle_bulb(idx):
+	global movie
 	bulb_ip = bulb_idx2ip[idx]
 	power = detected_bulbs[bulb_ip][2]
 	if power == "on":
-		detected_bulbs[bulb_ip][2] = "off"
-		set_day(idx, 100, 2000, 1);
+		set_day(0, 100, 2000, 1)
 		sleep(0.2)
+		movie = False
+		detected_bulbs[bulb_ip][2] = "off"
 		operate_on_bulb(idx, "toggle", "")
 	else:
 		detected_bulbs[bulb_ip][2] = "on"
 		operate_on_bulb(idx, "toggle", "")
-		sleep(0.2)
-		if not change:
-			set_day(idx, 100, color[0], color[1]);
-	
+		sleep(0.1)
 
-def day_timer():
+def alarm_day(alarm_time):
+	now = datetime.datetime.now()
+	alarm = datetime.datetime.combine(datetime.date.today(),alarm_time)
+	if now > alarm:
+		alarm = datetime.datetime.combine(datetime.date.today()+datetime.timedelta(days=1),alarm_time)
+	return alarm
+	
+def day_loop():
 	i = 0
 	global color
+	global alarm
 	while RUNNING:
 		now = datetime.datetime.now()
 		soon = datetime.datetime.combine(datetime.date.today(),times[i][0])
@@ -227,20 +233,20 @@ def day_timer():
 				break;
 			soon = datetime.datetime.combine(datetime.date.today(),times[i][0])
 		color = times[i-1][1]
-		set_day(0, 60000, color[0], color[1]);
-		global alarm
-		alarm = datetime.datetime.combine(datetime.date.today(),alarm_time)
-		if now > alarm:
-			alarm = datetime.datetime.combine(datetime.date.today()+datetime.timedelta(days=1),alarm_time)
+		set_day(0, 60000, color[0], color[1])
+		alarm = alarm_day(alarm_time)
 		while RUNNING and now < soon:
-			if alarm_time and detected_bulbs[bulb_idx2ip[0]][2] == "off" and (alarm-now).total_seconds() < 5:
-				toggle_bulb(0, 1)
-				set_day(0, 60000, 6000, 100);
+			if detected_bulbs[bulb_idx2ip[0]][2] == "off" and (alarm-now).total_seconds() < 5:
+				toggle_bulb(0)
+				set_day(0, 60000, 6000, 100)
 			sleep(1) # killable
 			now = datetime.datetime.now()
 
-	
 def control_loop():
+	control_socket = socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
+	control_socket.bind(("", 23232))
+	global alarm
+	global movie
 	while RUNNING:
 		data, addr = control_socket.recvfrom(4096)
 		if addr[0] != "127.0.0.1":
@@ -248,16 +254,18 @@ def control_loop():
 			global alarm_time
 			if data == 't':
 				toggle_bulb(0)
+				set_day(0, 1000, color[0], color[1])
+				sleep(1)
+				movie = False
 			elif data == 'm':
-				global movie
 				if detected_bulbs[bulb_idx2ip[0]][2] == "off":
-					toggle_bulb(0, 1)
+					toggle_bulb(0)
 					movie = True
 				else:
 					if movie:
-						set_day(0, 100, color[0], color[1]);
+						set_day(0, 1000, color[0], color[1]);
 					else:
-						set_day(0, 100, 2000, 1);
+						set_day(0, 1000, 2000, 1);
 					movie = not movie
 			elif data == 'u':
 				control_socket.sendto(alarm_time.strftime("%H%M").encode(),addr)
@@ -265,97 +273,41 @@ def control_loop():
 				h = int(data[1:3])
 				m = int(data[3:])
 				alarm_time = datetime.time(h, m, 0)
-				global alarm
-				alarm = datetime.datetime.combine(datetime.date.today(),alarm_time)
-				if datetime.datetime.now() > alarm:
-					alarm = datetime.datetime.combine(datetime.date.today()+datetime.timedelta(days=1),alarm_time)
+				alarm = alarm_day(alarm_time)
+	control_socket.close()
 
-
-
-
-def print_cli_usage():
-	print("Usage:")
-	print("  q|quit: quit bulb manager")
-	print("  t|toggle <idx>: toggle bulb indicated by idx")
-	print("  r|refresh: refresh bulb list")
-	print("  l|list: lsit all managed bulbs")
-	
 def handle_user_input():
-	'''
-	User interaction loop. 
-	'''
 	while True:
 		command_line = input("Enter a command: ")
-		valid_cli=True
-		debug("command_line=" + command_line)
 		command_line.lower() # convert all user input to lower case, i.e. cli is caseless
 		argv = command_line.split() # i.e. don't allow parameters with space characters
 		if len(argv) == 0:
 			continue
-		if argv[0] == "q" or argv[0] == "quit":
+		if argv[0] == "q":
 			print("Bye!")
 			return
-		elif argv[0] == "l" or argv[0] == "list":
+		elif argv[0] == "l":
 			display_bulbs()
-		elif argv[0] == "r" or argv[0] == "refresh":
-			detected_bulbs.clear()
-			bulb_idx2ip.clear()
-			send_search_broadcast()
-			sleep(0.5)
-			display_bulbs()
-		elif argv[0] == "t" or argv[0] == "toggle":
-			if len(argv) > 2:
-				valid_cli=False
-			else:
-				try:
-					if len(argv) == 2:
-						i = int(float(argv[1]))
-					else:
-						i = 0
-					toggle_bulb(i)
-				except:
-					valid_cli=False
-		elif argv[0] == "s":
-			if len(argv) != 3:
-				print("incorrect argc")
-				valid_cli=False
-			else:
-				try:
-					temp = int(float(argv[1]))
-					bright = int(float(argv[2]))
-					bright = min(bright,10)
-					temp = max(min(temp,65),17)
-					set_day(0, 1000, temp*100, bright*10)
-				except:
-					valid_cli=False
-		# elif argv[0] == "d":
-		# 	if len(argv) != 1:
-		# 		print("incorrect argc")
-		# 		valid_cli=False
-		# 	timer_thread = Thread(target=day_timer)
-		# 	timer_thread.start()
-		else:
-			valid_cli=False
-					
-		if not valid_cli:
-			print("error: invalid command line:", command_line)
-			print_cli_usage()
-## main starts here
-# print(welcome message first)
-print ("Welcome to Yeelight WifiBulb Lan controller")
-print_cli_usage()
-# start the bulb detection thread
-# user interaction loop
-detection_thread = Thread(target=bulbs_detection_loop)
+		elif argv[0] == "t":
+			toggle_bulb(0)
+		elif len(argv) == 2:
+			try:
+				temp = int(float(argv[0]))
+				bright = int(float(argv[1]))
+				set_day(0, 1000, temp, bright)
+			except:
+				pass
+
+detection_thread = threading.Thread(target=bulbs_detection_loop)
 detection_thread.start()
 
-control_thread = Thread(target=control_loop)
+event.wait()
+print("Ready")
+
+control_thread = threading.Thread(target=control_loop)
 control_thread.start()
 
-# give detection thread some time to collect bulb info
-sleep(1)
-
-timer_thread = Thread(target=day_timer)
+timer_thread = threading.Thread(target=day_loop)
 timer_thread.start()
 
 # user interaction loop
@@ -365,7 +317,6 @@ RUNNING = False
 kill_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 kill_socket.sendto("".encode(), ("localhost", 23232))
 kill_socket.close()
-control_socket.close()
 detection_thread.join()
 control_thread.join()
 timer_thread.join()
