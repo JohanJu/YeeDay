@@ -12,6 +12,8 @@ from time import sleep
 from collections import OrderedDict
 import datetime
 
+logf = open('/root/log.txt', 'w')
+
 testing = datetime.datetime.now()
 times = [
 	# ((testing+datetime.timedelta(seconds=10)).time(),(4000,80)),
@@ -25,7 +27,10 @@ movie = False
 
 event = threading.Event()
 event.clear()
+timerun = threading.Event()
+timerun.clear()
 lock = threading.Lock()
+alive =  False
 
 detected_bulbs = {}
 bulb_idx2ip = {}
@@ -35,11 +40,6 @@ current_command_id = 0
 MCAST_GRP = '239.255.255.250'
 scan_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM) 
 fcntl.fcntl(scan_socket, fcntl.F_SETFL, os.O_NONBLOCK)
-listen_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-listen_socket.bind(("", 1982))
-fcntl.fcntl(listen_socket, fcntl.F_SETFL, os.O_NONBLOCK)
-mreq = struct.pack("4sl", socket.inet_aton(MCAST_GRP), socket.INADDR_ANY)
-listen_socket.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
 
 def debug(msg):
 	if DEBUGGING:
@@ -67,44 +67,30 @@ def bulbs_detection_loop():
 	a standalone thread broadcasting search request and listening on all responses
 	'''
 	debug("bulbs_detection_loop running")
-	search_interval=5000
-	read_interval=100
-	time_elapsed=0
-
+	search_interval=500
+	global alive
 	while RUNNING:
-		if time_elapsed%search_interval == 0:
-			send_search_broadcast()
+		send_search_broadcast()
 
 		# scanner
 		while True:
 			try:
 				data = scan_socket.recv(2048)
+				handle_search_response(data.decode())
+				if not alive:
+					timerun.wait()
+					set_day(0, 1000, color[0], color[1])
+				alive = True
 			except socket.error as e:
 				err = e.args[0]
 				if err == errno.EAGAIN or err == errno.EWOULDBLOCK:
-						break
+					break
 				else:
-						print(e)
-						sys.exit(1)
-			handle_search_response(data.decode())
+					print(e)
+					sys.exit(1)
 
-		# passive listener 
-		while True:
-			try:
-				data, addr = listen_socket.recvfrom(2048)
-			except socket.error as e:
-				err = e.args[0]
-				if err == errno.EAGAIN or err == errno.EWOULDBLOCK:
-						break
-				else:
-						print(e)
-						sys.exit(1)
-			handle_search_response(data.decode())
-
-		time_elapsed+=read_interval
-		sleep(read_interval/1000.0)
+		sleep(search_interval/1000.0)
 	scan_socket.close()
-	listen_socket.close()
 
 def get_param_value(data, param):
 	'''
@@ -185,7 +171,7 @@ def operate_on_bulb(idx, method, params):
 		tcp_socket.connect((bulb_ip, int(port)))
 		msg="{\"id\":" + str(next_cmd_id()) + ",\"method\":\""
 		msg += method + "\",\"params\":[" + params + "]}\r\n"
-		# print(msg[:-2], datetime.datetime.now().replace(microsecond=0), flush=True)
+		print(msg[:-2], datetime.datetime.now().replace(microsecond=0), flush=True, file=logf)
 		tcp_socket.send(msg.encode())
 		tcp_socket.close()
 	except Exception as e:
@@ -222,6 +208,7 @@ def day_loop():
 	i = 0
 	global color
 	global alarm
+	global alive
 	while RUNNING:
 		now = datetime.datetime.now()
 		soon = datetime.datetime.combine(datetime.date.today(),times[i][0])
@@ -233,7 +220,9 @@ def day_loop():
 				break;
 			soon = datetime.datetime.combine(datetime.date.today(),times[i][0])
 		color = times[i-1][1]
-		set_day(0, 60000, color[0], color[1])
+		if alive:
+			set_day(0, 60000, color[0], color[1])
+		timerun.set()
 		alarm = alarm_day(alarm_time)
 		while RUNNING and now < soon:
 			if detected_bulbs[bulb_idx2ip[0]][2] == "off" and (alarm-now).total_seconds() < 5:
@@ -276,6 +265,19 @@ def control_loop():
 				alarm = alarm_day(alarm_time)
 	control_socket.close()
 
+def watchdog_loop():
+	global alive
+	while RUNNING:
+		event.wait()
+		sleep(1)
+		if not alive:
+			bulb_ip = bulb_idx2ip[0]
+			detected_bulbs[bulb_ip][2] = "off"
+			event.clear()
+		alive =  False
+		
+
+
 def handle_user_input():
 	while True:
 		command_line = input("Enter a command: ")
@@ -310,9 +312,13 @@ control_thread.start()
 timer_thread = threading.Thread(target=day_loop)
 timer_thread.start()
 
+watchdog_thread = threading.Thread(target=watchdog_loop)
+watchdog_thread.start()
+
 # user interaction loop
 handle_user_input()
 # user interaction end, tell detection thread to quit and wait
+event.set()
 RUNNING = False
 kill_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 kill_socket.sendto("".encode(), ("localhost", 23232))
@@ -320,4 +326,5 @@ kill_socket.close()
 detection_thread.join()
 control_thread.join()
 timer_thread.join()
+watchdog_thread.join()
 # done
