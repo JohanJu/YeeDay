@@ -31,6 +31,7 @@ timerun = threading.Event()
 timerun.clear()
 lock = threading.Lock()
 alive =  False
+dead = True
 
 detected_bulbs = {}
 bulb_idx2ip = {}
@@ -69,6 +70,7 @@ def bulbs_detection_loop():
 	debug("bulbs_detection_loop running")
 	search_interval=500
 	global alive
+	global dead
 	while RUNNING:
 		send_search_broadcast()
 
@@ -77,8 +79,9 @@ def bulbs_detection_loop():
 			try:
 				data = scan_socket.recv(2048)
 				handle_search_response(data.decode())
-				if not alive:
+				if dead:
 					timerun.wait()
+					dead = False
 					set_day(0, 1000, color[0], color[1])
 				alive = True
 			except socket.error as e:
@@ -208,7 +211,7 @@ def day_loop():
 	i = 0
 	global color
 	global alarm
-	global alive
+	global dead
 	while RUNNING:
 		now = datetime.datetime.now()
 		soon = datetime.datetime.combine(datetime.date.today(),times[i][0])
@@ -220,7 +223,7 @@ def day_loop():
 				break;
 			soon = datetime.datetime.combine(datetime.date.today(),times[i][0])
 		color = times[i-1][1]
-		if alive:
+		if not dead:
 			set_day(0, 60000, color[0], color[1])
 		timerun.set()
 		alarm = alarm_day(alarm_time)
@@ -267,12 +270,14 @@ def control_loop():
 
 def watchdog_loop():
 	global alive
+	global dead
 	while RUNNING:
 		event.wait()
 		sleep(1)
 		if not alive:
 			bulb_ip = bulb_idx2ip[0]
 			detected_bulbs[bulb_ip][2] = "off"
+			dead = True
 			event.clear()
 		alive =  False
 		
