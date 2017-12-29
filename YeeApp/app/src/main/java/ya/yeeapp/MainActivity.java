@@ -57,6 +57,9 @@ public class MainActivity extends AppCompatActivity {
     public void movie(View view) {
        udp("m");
     }
+    public void full(View view) {
+        udp("f");
+    }
     public void alarm(View view) {
         String time = editText.getText().toString();
         udp("a"+time);
