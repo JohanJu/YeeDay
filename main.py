@@ -23,7 +23,7 @@ times = [
 ]
 alarm_time = datetime.time(6, 50, 0)
 color = (2000, 1)
-movie = False
+mode = 0
 
 event = threading.Event()
 event.clear()
@@ -186,13 +186,13 @@ def set_day(idx, dur, temp, bright):
 	operate_on_bulb(idx, "start_cf", cmd)
 
 def toggle_bulb(idx):
-	global movie
+	global mode
 	bulb_ip = bulb_idx2ip[idx]
 	power = detected_bulbs[bulb_ip][2]
 	if power == "on":
 		set_day(0, 100, 2000, 1)
 		sleep(0.2)
-		movie = False
+		mode = 0
 		detected_bulbs[bulb_ip][2] = "off"
 		operate_on_bulb(idx, "toggle", "")
 	else:
@@ -228,9 +228,12 @@ def day_loop():
 		timerun.set()
 		alarm = alarm_day(alarm_time)
 		while RUNNING and now < soon:
-			if detected_bulbs[bulb_idx2ip[0]][2] == "off" and (alarm-now).total_seconds() < 5:
-				toggle_bulb(0)
-				set_day(0, 60000, 6000, 100)
+			if (alarm-now).total_seconds() < 3:
+				if detected_bulbs[bulb_idx2ip[0]][2] == "off":
+					toggle_bulb(0)
+					set_day(0, 60000, 6000, 100)
+				else:
+					alarm = alarm_day(alarm_time)
 			sleep(1) # killable
 			now = datetime.datetime.now()
 
@@ -238,7 +241,7 @@ def control_loop():
 	control_socket = socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
 	control_socket.bind(("", 23232))
 	global alarm
-	global movie
+	global mode
 	while RUNNING:
 		data, addr = control_socket.recvfrom(4096)
 		if addr[0] != "127.0.0.1":
@@ -248,17 +251,27 @@ def control_loop():
 				toggle_bulb(0)
 				set_day(0, 1000, color[0], color[1])
 				sleep(1)
-				movie = False
+				mode = 0
 			elif data == 'm':
 				if detected_bulbs[bulb_idx2ip[0]][2] == "off":
 					toggle_bulb(0)
-					movie = True
+					mode = 0
+				if mode == 1:
+					set_day(0, 1000, color[0], color[1]);
+					mode = 0
 				else:
-					if movie:
-						set_day(0, 1000, color[0], color[1]);
-					else:
-						set_day(0, 1000, 2000, 1);
-					movie = not movie
+					set_day(0, 1000, 2000, 1);
+					mode = 1
+			elif data == 'f':
+				if detected_bulbs[bulb_idx2ip[0]][2] == "off":
+					toggle_bulb(0)
+					mode = 0
+				if mode == 2:
+					set_day(0, 1000, color[0], color[1]);
+					mode = 0
+				else:
+					set_day(0, 1000, 4000, 100);
+					mode = 2
 			elif data == 'u':
 				control_socket.sendto(alarm_time.strftime("%H%M").encode(),addr)
 			else:
